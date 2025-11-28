@@ -121,7 +121,12 @@ def render_map(state_key: str, center: list[float], color: str, tooltip: str, ma
         fill_color=color,
         tooltip=tooltip,
     ).add_to(fmap)
-    event = st_folium(fmap, height=420, key=map_key)
+    event = st_folium(
+        fmap,
+        height=420,
+        width=None,
+        key=map_key,
+    )
     if event and event.get("last_clicked"):
         st.session_state[state_key] = {
             "lat": event["last_clicked"]["lat"],

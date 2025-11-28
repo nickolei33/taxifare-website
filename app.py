@@ -192,7 +192,6 @@ with route_col:
             "Pickup actuel",
             "pickup_map",
         )
-        st.caption("Astuce : Zoomez sur la zone Midtown pour une navigation plus précise.")
     with tab_drop:
         render_map(
             "dropoff",
@@ -293,7 +292,6 @@ with form_col:
         time_value = st.time_input("Heure (UTC)", value=default_dt.time())
         datetime_value = datetime.combine(date_value, time_value).strftime("%Y-%m-%d %H:%M:%S")
         passenger_count = st.slider("Nombre de passagers", 1, 8, 2)
-        st.caption("Le modèle accepte les pas de temps au format YYYY-MM-DD HH:MM:SS.")
         submitted = st.form_submit_button("Lancer la prédiction")
         if submitted:
             params = {

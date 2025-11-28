@@ -3,6 +3,7 @@ import folium
 from streamlit_folium import st_folium
 import requests
 from datetime import datetime
+from base64 import b64encode
 
 st.set_page_config(
     page_title="NYC Taxi Fare Forecaster",
@@ -12,12 +13,46 @@ st.set_page_config(
 
 
 def inject_local_css(path: str = "styles.css") -> None:
-    """Charge la feuille de style locale pour uniformiser l'UI."""
+    """Charge la feuille de style locale + arrière-plan personnalisé."""
+    css_chunks: list[str] = []
     try:
         with open(path, encoding="utf-8") as css:
-            st.markdown(f"<style>{css.read()}</style>", unsafe_allow_html=True)
+            css_chunks.append(css.read())
     except FileNotFoundError:
         st.info("Ajoutez un fichier styles.css pour appliquer le thème personnalisé.", icon="🎨")
+
+    try:
+        with open("background.webp", "rb") as bg:
+            encoded = b64encode(bg.read()).decode()
+            css_chunks.append(
+                f"""
+                .stApp::before {{
+                    content: "";
+                    position: fixed;
+                    inset: 0;
+                    background-image: url("data:image/webp;base64,{encoded}");
+                    background-size: cover;
+                    background-position: center;
+                    filter: blur(1px);
+                    transform: scale(1.05);
+                    z-index: -2;
+                    pointer-events: none;
+                }}
+                .stApp::after {{
+                    content: "";
+                    position: fixed;
+                    inset: 0;
+                    background: linear-gradient(135deg, rgba(2, 4, 12, 0.95), rgba(5, 14, 40, 0.7));
+                    z-index: -1;
+                    pointer-events: none;
+                }}
+                """
+            )
+    except FileNotFoundError:
+        st.info("Ajoutez background.webp à la racine pour activer l'image de fond.", icon="🖼️")
+
+    if css_chunks:
+        st.markdown(f"<style>{''.join(css_chunks)}</style>", unsafe_allow_html=True)
 
 
 inject_local_css()
@@ -94,6 +129,39 @@ def render_map(state_key: str, center: list[float], color: str, tooltip: str, ma
         }
 
 
+GEOCODE_ENDPOINTS = [
+    "https://nominatim.openstreetmap.org/search",
+    "https://geocode.maps.co/search",
+]
+
+
+@st.cache_data(show_spinner=False)
+def geocode_address(query: str) -> tuple[float, float] | None:
+    """Retourne les coordonnées (lat, lon) pour une adresse via Nominatim."""
+    if not query.strip():
+        return None
+    for endpoint in GEOCODE_ENDPOINTS:
+        try:
+            response = requests.get(
+                endpoint,
+                params={"q": query, "format": "json", "limit": 1},
+                headers={"User-Agent": "nyc-taxi-fare-app"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            results = response.json()
+            if results:
+                return float(results[0]["lat"]), float(results[0]["lon"])
+        except requests.HTTPError as exc:
+            if response.status_code == 503:
+                st.warning("Service de géocodage saturé. Réessayez dans quelques secondes.")
+            else:
+                st.warning(f"Erreur géocodage ({response.status_code}) sur {endpoint}.")
+        except requests.RequestException as exc:
+            st.warning(f"Impossible de joindre {endpoint} : {exc}")
+    return None
+
+
 API_URL = "https://taxifare-161041691439.europe-west1.run.app/predict"
 
 route_col, form_col = st.columns([1.2, 0.9], gap="large")
@@ -110,7 +178,7 @@ with route_col:
         """,
         unsafe_allow_html=True,
     )
-    tab_pick, tab_drop = st.tabs(["Pickup", "Dropoff"])
+    tab_pick, tab_drop, tab_address = st.tabs(["Pickup", "Dropoff", "Adresse"])
     with tab_pick:
         render_map(
             "pickup",
@@ -129,6 +197,44 @@ with route_col:
             "dropoff_map",
         )
         st.caption("Astuce : Utilisez les repères iconiques (Central Park, Hudson) pour vous situer.")
+    with tab_address:
+        st.markdown("#### Géocoder vos adresses")
+        col_left, col_right = st.columns(2)
+        with col_left:
+            pickup_address = st.text_input(
+                "Adresse Pickup",
+                key="pickup_address",
+                placeholder="1560 Broadway, New York, NY 10036",
+            )
+        with col_right:
+            dropoff_address = st.text_input(
+                "Adresse Dropoff",
+                key="dropoff_address",
+                placeholder="334 Furman St, Brooklyn, NY 11201",
+            )
+
+        if st.button("Géocoder les deux adresses", key="geocode_button"):
+            success_msgs = []
+            if pickup_address.strip():
+                coords = geocode_address(pickup_address)
+                if coords:
+                    st.session_state["pickup"] = {"lat": coords[0], "lon": coords[1]}
+                    success_msgs.append(
+                        f"Pickup : {coords[0]:.5f}, {coords[1]:.5f}"
+                    )
+                else:
+                    st.warning("Pickup introuvable. Vérifiez l'adresse ou précisez davantage.")
+            if dropoff_address.strip():
+                coords = geocode_address(dropoff_address)
+                if coords:
+                    st.session_state["dropoff"] = {"lat": coords[0], "lon": coords[1]}
+                    success_msgs.append(
+                        f"Dropoff : {coords[0]:.5f}, {coords[1]:.5f}"
+                    )
+                else:
+                    st.warning("Dropoff introuvable. Vérifiez l'adresse ou précisez davantage.")
+            if success_msgs:
+                st.success(" | ".join(success_msgs))
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -214,8 +320,7 @@ if result_data:
         <div class="result-card">
             <div class="result-card__badge">Estimation dynamique</div>
             <h3>{result_data['fare']:.2f} $</h3>
-            <p>Tarif prévisionnel pour {result_data['passengers']} passager(s) le {result_data['datetime']}.
-            Ajustez vos paramètres pour anticiper les fluctuations.</p>
+            <p>Tarif prévisionnel pour {result_data['passengers']} passager(s) le {result_data['datetime']}.</p>
         </div>
         """,
         unsafe_allow_html=True,
